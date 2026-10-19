@@ -79,7 +79,7 @@ OPGERUIMD97/safelight-print-mat
 
 ## Export & Print integration
 
-The active Print Mat template is automatically applied during Safelight export **and** when printing via the [Print extension](https://github.com/OPGERUIMD97/safelight-print) — no extra steps needed. Disable via the "Enable print mat" checkbox to skip it.
+The active Print Mat template is applied during Safelight export **and** when printing via the [Print extension](https://github.com/OPGERUIMD97/safelight-print). In the Export panel under **Print Mat** you can toggle **Apply print mat** and pick which **Template** to use. The panel's **Show in Develop** checkbox only controls the live Develop overlay.
 
 ## How it differs from the Border extension
 
