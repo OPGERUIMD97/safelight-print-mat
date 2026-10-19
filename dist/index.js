@@ -1,7 +1,9 @@
-// Safelight Print Mat Extension v1.0.0
+// Safelight Print Mat Extension v1.2.0
 // Complete photo framing toolkit:
 // Canvas system, photo scale, mat + bevel, frame + ratio, rounded/circle corners,
 // directional shadows (frame + internal), textures, EXIF captions, defaults.
+// Mat/frame can each be disabled independently ("No mat" / "No frame").
+// Panel preview always reflects current settings; "Enable" controls Develop + export.
 
 const STORAGE_KEY  = "safelight-print-mat-templates";
 const DEFAULTS_KEY = "safelight-print-mat-user-defaults";
@@ -37,12 +39,12 @@ const TEXTURE_PRESETS = [
   { name: "Turquoise Terrazzo", texture: "terrazzo", color: "#3fa896" },
 ];
 
+// Color styles only — on/off is frameEnabled ("No frame (mat only)"), mirroring matEnabled.
 const FRAME_STYLES = [
-  { id: "none",  label: "No frame (mat only)" },
-  { id: "black", label: "Black frame" },
-  { id: "brown", label: "Brown frame" },
-  { id: "white", label: "White frame" },
-  { id: "gold",  label: "Gold frame" },
+  { id: "black", label: "Black" },
+  { id: "brown", label: "Brown" },
+  { id: "white", label: "White" },
+  { id: "gold",  label: "Gold" },
 ];
 
 const CORNER_STYLES = [
@@ -141,7 +143,8 @@ function freshTemplate() {
     // Photo scale (how much of the canvas the framed photo occupies)
     photoScale: 100,    // 5-100 %, only relevant when canvasRatio !== "auto"
 
-    // Mat
+    // Mat (passe-partout). Set matEnabled false for "No mat (frame only)".
+    matEnabled: true,
     matColor: "#ffffff",
     matTexture: "solid",
     matWidthTop:    4,
@@ -155,8 +158,10 @@ function freshTemplate() {
     matteBevelSize: 0.8,     // % of long edge
     matteBevelStrength: 50,  // 0-100
 
-    // Frame (outer border around the mat)
-    frameStyle: "none",
+    // Frame (outer border around the mat). frameEnabled false = "No frame (mat only)".
+    // Legacy templates may still have frameStyle: "none" — treated as off by isFrameOn().
+    frameEnabled: false,
+    frameStyle: "black",
     frameWidth: 1.5,
     frameRatio: "auto",      // independent aspect ratio for the frame itself
 
@@ -189,15 +194,50 @@ function freshTemplate() {
 
 const PRESETS = [
   { name: "Classic Mat",           over: {} },
-  { name: "Black Frame + Mat",     over: { frameStyle: "black", frameWidth: 1.2, matWidthBottom: 4 } },
-  { name: "Brown Frame + Mat",     over: { frameStyle: "brown", frameWidth: 1.5, matWidthBottom: 4 } },
-  { name: "Rounded Black Frame",   over: { frameStyle: "black", cornerStyle: "rounded", cornerRadius: 4, matWidthBottom: 4 } },
+  { name: "Black Frame + Mat",     over: { frameEnabled: true, frameStyle: "black", frameWidth: 1.2, matWidthBottom: 4 } },
+  { name: "Brown Frame + Mat",     over: { frameEnabled: true, frameStyle: "brown", frameWidth: 1.5, matWidthBottom: 4 } },
+  { name: "Black Frame Only",      over: { matEnabled: false, frameEnabled: true, frameStyle: "black", frameWidth: 2, matteBevel: false, textFields: [] } },
+  { name: "Rounded Black Frame",   over: { frameEnabled: true, frameStyle: "black", cornerStyle: "rounded", cornerRadius: 4, matWidthBottom: 4 } },
   { name: "White Passe-Partout",   over: { matColor: "#ffffff", matWidthBottom: 4, textFields: [] } },
   { name: "Rounded White Mat",     over: { matColor: "#ffffff", cornerStyle: "rounded", cornerRadius: 3, matWidthBottom: 4, textFields: [] } },
   { name: "Instant Film (Square)", over: { matColor: "#ffffff", matWidthTop: 4, matWidthRight: 4, matWidthLeft: 4, matWidthBottom: 18, cornerStyle: "rounded", cornerRadius: 2, textFields: [] } },
   { name: "Circle Frame",          over: { matColor: "#ffffff", cornerStyle: "circle", cropRatio: "1:1", matWidthBottom: 4, textFields: [] } },
   { name: "Floating on Canvas",    over: { canvasRatio: "1:1", canvasColor: "#e8e4dc", photoScale: 78, frameShadow: true, frameShadowOpacity: 30, matWidthBottom: 4, textFields: [] } },
 ];
+
+// Effective mat insets for layout/render. When mat is off, widths are 0 so the
+// frame (if any) sits directly against the photo — "No mat (frame only)".
+// Missing matEnabled (older saved templates) is treated as enabled.
+function effectiveMatInsets(template, long) {
+  if (template.matEnabled === false) {
+    return { matTop: 0, matRight: 0, matBottom: 0, matLeft: 0 };
+  }
+  const scale = (v) => Math.round(long * ((v || 0) / 100));
+  return {
+    matTop:    scale(template.matWidthTop),
+    matRight:  scale(template.matWidthRight),
+    matBottom: scale(template.matWidthBottom),
+    matLeft:   scale(template.matWidthLeft),
+  };
+}
+
+// Frame on/off — mirrors matEnabled.
+// - frameEnabled === false → off (even if a color style is remembered)
+// - frameEnabled === true  → on (style "none"/missing falls back to black in UI)
+// - frameEnabled missing   → legacy: derive from frameStyle ("none" = off)
+function isFrameOn(template) {
+  if (template.frameEnabled === false) return false;
+  if (template.frameEnabled === true) {
+    return true;
+  }
+  if (!template.frameStyle || template.frameStyle === "none") return false;
+  return true;
+}
+
+function effectiveFrameStyle(template) {
+  if (!isFrameOn(template)) return null;
+  return FRAME_COLORS[template.frameStyle] ? template.frameStyle : "black";
+}
 
 function buildPreset(over) {
   return { ...freshTemplate(), ...over,
@@ -302,15 +342,29 @@ const S = {
 };
 
 // ── Storage ───────────────────────────────────────────────────────────────────
+// In-memory cache so debounced writes never leave export/overlay reading a
+// stale localStorage snapshot while the user is still dragging a slider.
+let templatesCache = null;
+let saveTemplatesTimer = null;
+
 function loadTemplates() {
+  if (templatesCache) return templatesCache;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      templatesCache = JSON.parse(raw);
+      return templatesCache;
+    }
   } catch (e) {}
-  return [freshTemplate()];
+  templatesCache = [freshTemplate()];
+  return templatesCache;
 }
 function saveTemplates(t) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(t)); } catch (e) {}
+  templatesCache = t;
+  if (saveTemplatesTimer) clearTimeout(saveTemplatesTimer);
+  saveTemplatesTimer = setTimeout(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(templatesCache)); } catch (e) {}
+  }, 180);
 }
 function loadUserDefaults() {
   try {
@@ -446,18 +500,21 @@ function resolveFieldText(field, photo) {
 }
 
 // ── Texture generation ───────────────────────────────────────────────────────
-function applyTexture(ctx, x, y, w, h, textureId, baseColor) {
+// density < 1 (preview/overlay) draws fewer strokes/particles — big speed win
+// on large canvases while still reading as the same texture family.
+function applyTexture(ctx, x, y, w, h, textureId, baseColor, density = 1) {
   ctx.fillStyle = baseColor;
   ctx.fillRect(x, y, w, h);
   if (textureId === "solid" || !textureId) return;
 
+  const d = Math.max(0.15, Math.min(1, density));
   ctx.save();
   ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
 
   switch (textureId) {
     case "linen": {
       ctx.globalAlpha = 0.08; ctx.strokeStyle = "#000"; ctx.lineWidth = 1;
-      const spacing = Math.max(3, w * 0.012);
+      const spacing = Math.max(3, w * 0.012) / d;
       for (let i = -h; i < w + h; i += spacing) {
         ctx.beginPath(); ctx.moveTo(x + i, y); ctx.lineTo(x + i - h, y + h); ctx.stroke();
       }
@@ -468,7 +525,7 @@ function applyTexture(ctx, x, y, w, h, textureId, baseColor) {
       break;
     }
     case "felt": {
-      const dotCount = Math.floor((w * h) / 40);
+      const dotCount = Math.floor(((w * h) / 40) * d);
       for (let i = 0; i < dotCount; i++) {
         const px = x + Math.random() * w, py = y + Math.random() * h;
         ctx.globalAlpha = Math.random() * 0.06;
@@ -479,7 +536,7 @@ function applyTexture(ctx, x, y, w, h, textureId, baseColor) {
     }
     case "wood": {
       ctx.globalAlpha = 0.12; ctx.strokeStyle = "#5a3a1a";
-      const lines = Math.max(8, Math.floor(h / 6));
+      const lines = Math.max(8, Math.floor((h / 6) * d));
       for (let i = 0; i < lines; i++) {
         const ly = y + (h / lines) * i + (Math.random() - 0.5) * 3;
         ctx.lineWidth = 0.5 + Math.random() * 1.5;
@@ -490,7 +547,7 @@ function applyTexture(ctx, x, y, w, h, textureId, baseColor) {
       break;
     }
     case "terrazzo": {
-      const chipCount = Math.floor((w * h) / 800);
+      const chipCount = Math.floor(((w * h) / 800) * d);
       for (let i = 0; i < chipCount; i++) {
         const px = x + Math.random() * w, py = y + Math.random() * h;
         const r = 2 + Math.random() * 4;
@@ -502,7 +559,7 @@ function applyTexture(ctx, x, y, w, h, textureId, baseColor) {
       break;
     }
     case "grass": {
-      const blades = Math.floor(w / 2);
+      const blades = Math.floor((w / 2) * d);
       for (let i = 0; i < blades; i++) {
         const px = x + Math.random() * w, py = y + Math.random() * h;
         const len = 2 + Math.random() * 3;
@@ -514,7 +571,7 @@ function applyTexture(ctx, x, y, w, h, textureId, baseColor) {
       break;
     }
     case "paper": {
-      const dotCount = Math.floor((w * h) / 25);
+      const dotCount = Math.floor(((w * h) / 25) * d);
       for (let i = 0; i < dotCount; i++) {
         const px = x + Math.random() * w, py = y + Math.random() * h;
         ctx.globalAlpha = Math.random() * 0.04;
@@ -576,28 +633,33 @@ function computeCropRect(bw, bh, ratioId, offset) {
 }
 
 // ── Main render (export + preview share this) ────────────────────────────────
-async function renderPrintMat(blob, template, photo) {
-  console.log("[safelight-print-mat] renderPrintMat() called —", { templateEnabled: template.enabled, blobSize: blob.size, blobType: blob.type });
-  if (!template.enabled) return blob;
+// options:
+//   maxLongEdge — downscale photo before framing (preview/overlay speed)
+//   preview     — lighter textures + slightly lower JPEG quality
+//   quality     — JPEG quality override
+// NOTE: template.enabled is NOT checked here. Callers (export / Develop overlay)
+// gate application; the panel preview always renders current settings.
+async function renderPrintMat(blob, template, photo, options = {}) {
   const srcBitmap = await createImageBitmap(blob);
-  console.log("[safelight-print-mat] source decoded —", { width: srcBitmap.width, height: srcBitmap.height });
   if (!srcBitmap.width || !srcBitmap.height) {
     throw new Error(`[safelight-print-mat] Photo failed to decode (got ${srcBitmap.width}x${srcBitmap.height} from a ${blob.size}-byte ${blob.type} blob). Falling back to the unedited export.`);
   }
 
-  // 1. Crop
+  // 1. Crop (+ optional downscale for preview/overlay)
   const crop = computeCropRect(srcBitmap.width, srcBitmap.height, template.cropRatio, template.cropOffset ?? 0.5);
   let photoW = Math.round(crop.sw), photoH = Math.round(crop.sh);
+  const maxLong = options.maxLongEdge;
+  if (maxLong && Math.max(photoW, photoH) > maxLong) {
+    const s = maxLong / Math.max(photoW, photoH);
+    photoW = Math.max(1, Math.round(photoW * s));
+    photoH = Math.max(1, Math.round(photoH * s));
+  }
 
   const cropCanvas = new OffscreenCanvas(photoW, photoH);
-  const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
+  // willReadFrequently only needed when we sample pixels for debug — skip for speed
+  const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: false });
   cropCtx.drawImage(srcBitmap, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, photoW, photoH);
-  try {
-    const px = cropCtx.getImageData(Math.round(photoW / 2), Math.round(photoH / 2), 1, 1).data;
-    console.log("[safelight-print-mat] pixel sample at center (cropCanvas, right after crop):", Array.from(px));
-  } catch (err) {
-    console.error("[safelight-print-mat] could not sample pixel from cropCanvas:", err);
-  }
+  srcBitmap.close?.();
   // Note: cropCanvas itself is a valid CanvasImageSource — drawing it directly
   // below avoids an extra createImageBitmap(canvas) round-trip. That extra
   // decode step has been observed to silently produce a black/blank result
@@ -608,14 +670,15 @@ async function renderPrintMat(blob, template, photo) {
 
   const long = Math.max(photoW, photoH);
   const short = Math.min(photoW, photoH);
+  const texDensity = options.preview ? 0.35 : 1;
 
   const isCircle = template.cornerStyle === "circle";
 
-  const frameW = template.frameStyle !== "none" ? Math.round(long * (template.frameWidth / 100)) : 0;
-  const matTop    = Math.round(long * (template.matWidthTop    / 100));
-  const matRight  = Math.round(long * (template.matWidthRight  / 100));
-  const matBottom = Math.round(long * (template.matWidthBottom / 100));
-  const matLeft   = Math.round(long * (template.matWidthLeft   / 100));
+  const frameOn = isFrameOn(template);
+  const frameW = frameOn ? Math.round(long * (template.frameWidth / 100)) : 0;
+  const frameColorKey = effectiveFrameStyle(template);
+  const { matTop, matRight, matBottom, matLeft } = effectiveMatInsets(template, long);
+  const matOn = template.matEnabled !== false;
 
   // Framed unit size (photo + mat + frame)
   let unitW = photoW + matLeft + matRight  + frameW * 2;
@@ -651,11 +714,11 @@ async function renderPrintMat(blob, template, photo) {
     : 0;
 
   const canvas = new OffscreenCanvas(Math.round(W + frameShadowPad * 2), Math.round(H + frameShadowPad * 2));
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const ctx = canvas.getContext("2d", { willReadFrequently: false });
   const ox = frameShadowPad, oy = frameShadowPad;
 
   // 3. Canvas background
-  applyTexture(ctx, ox, oy, W, H, template.canvasTexture, template.canvasColor || "#e8e4dc");
+  applyTexture(ctx, ox, oy, W, H, template.canvasTexture, template.canvasColor || "#e8e4dc", texDensity);
 
   // 4. Frame shadow (directional drop shadow under the framed unit)
   const cornerR = (template.cornerStyle === "rounded") ? Math.round(short * (template.cornerRadius / 100)) : 0;
@@ -691,7 +754,7 @@ async function renderPrintMat(blob, template, photo) {
   }
 
   if (frameW > 0) {
-    ctx.fillStyle = FRAME_COLORS[template.frameStyle] || "#1a1a1a";
+    ctx.fillStyle = FRAME_COLORS[frameColorKey] || "#1a1a1a";
     ctx.fillRect(ux, uy, unitW, unitH);
     const grad = ctx.createLinearGradient(ux, uy, ux, uy + unitH);
     grad.addColorStop(0, "rgba(255,255,255,0.15)");
@@ -702,23 +765,27 @@ async function renderPrintMat(blob, template, photo) {
     ctx.fillRect(ux, uy, unitW, unitH);
   }
 
-  const matX = ux + frameW, matY = uy + frameW;
-  const matW = unitW - frameW * 2, matH = unitH - frameW * 2;
-  applyTexture(ctx, matX, matY, matW, matH, template.matTexture, template.matColor);
+  // Mat fill only when passe-partout is enabled (and has area beyond the photo).
+  // With "No mat (frame only)" the frame (if any) sits directly against the photo.
+  if (matOn) {
+    const matX = ux + frameW, matY = uy + frameW;
+    const matW = unitW - frameW * 2, matH = unitH - frameW * 2;
+    applyTexture(ctx, matX, matY, matW, matH, template.matTexture, template.matColor, texDensity);
 
-  // Matte bevel — subtle 3D ridge around the photo, inset into the mat
-  if (template.matteBevel) {
-    const bevelSize = Math.max(1, long * (template.matteBevelSize / 100));
-    const strength = (template.matteBevelStrength || 50) / 100;
-    const photoX = ux + frameW + matLeft, photoY = uy + frameW + matTop;
-    ctx.save();
-    ctx.strokeStyle = `rgba(255,255,255,${0.5 * strength})`;
-    ctx.lineWidth = bevelSize;
-    ctx.strokeRect(photoX - bevelSize/2, photoY - bevelSize/2, photoW + bevelSize, photoH + bevelSize);
-    ctx.strokeStyle = `rgba(0,0,0,${0.35 * strength})`;
-    ctx.lineWidth = bevelSize * 0.6;
-    ctx.strokeRect(photoX - bevelSize, photoY - bevelSize, photoW + bevelSize*2, photoH + bevelSize*2);
-    ctx.restore();
+    // Matte bevel — subtle 3D ridge around the photo, inset into the mat
+    if (template.matteBevel) {
+      const bevelSize = Math.max(1, long * (template.matteBevelSize / 100));
+      const strength = (template.matteBevelStrength || 50) / 100;
+      const photoX = ux + frameW + matLeft, photoY = uy + frameW + matTop;
+      ctx.save();
+      ctx.strokeStyle = `rgba(255,255,255,${0.5 * strength})`;
+      ctx.lineWidth = bevelSize;
+      ctx.strokeRect(photoX - bevelSize/2, photoY - bevelSize/2, photoW + bevelSize, photoH + bevelSize);
+      ctx.strokeStyle = `rgba(0,0,0,${0.35 * strength})`;
+      ctx.lineWidth = bevelSize * 0.6;
+      ctx.strokeRect(photoX - bevelSize, photoY - bevelSize, photoW + bevelSize*2, photoH + bevelSize*2);
+      ctx.restore();
+    }
   }
 
   ctx.restore();
@@ -764,15 +831,7 @@ async function renderPrintMat(blob, template, photo) {
     // Pure circle crop with no mat/frame
     ctx.beginPath(); ctx.arc(photoX + photoW/2, photoY + photoH/2, Math.min(photoW,photoH)/2, 0, Math.PI*2); ctx.clip();
   }
-  console.log("[safelight-print-mat] drawing photo:", { photoX, photoY, photoW, photoH,
-    cropCanvasSize: [cropCanvas.width, cropCanvas.height], srcBitmapSize: [srcBitmap.width, srcBitmap.height] });
   ctx.drawImage(cropCanvas, photoX, photoY, photoW, photoH);
-  try {
-    const px = ctx.getImageData(Math.round(photoX + photoW / 2), Math.round(photoY + photoH / 2), 1, 1).data;
-    console.log("[safelight-print-mat] pixel sample at photo center (main canvas, after drawImage):", Array.from(px));
-  } catch (err) {
-    console.error("[safelight-print-mat] could not sample pixel from main canvas:", err);
-  }
   ctx.restore();
 
   // 8. Text fields — multiple fields sharing the same anchor are stacked
@@ -867,12 +926,13 @@ async function renderPrintMat(blob, template, photo) {
     ctx.restore();
   }
 
-  return canvas.convertToBlob({ type: "image/jpeg", quality: 0.95 });
+  const q = options.quality ?? (options.preview ? 0.82 : 0.95);
+  return canvas.convertToBlob({ type: "image/jpeg", quality: q });
 }
 
 // ── Activation ─────────────────────────────────────────────────────────────────
-export function activate(api) {
-  console.log("%c[safelight-print-mat] extension loaded — version 3.5.2", "color:#C15F3C;font-weight:bold");
+  export function activate(api) {
+  console.log("%c[safelight-print-mat] extension loaded — v1.2.0", "color:#C15F3C;font-weight:bold");
   const { react: React, stores } = api;
   const { useState, useEffect, useCallback, useRef } = React;
   const ce = (type, props, ...ch) => React.createElement(type, props, ...ch);
@@ -1096,8 +1156,7 @@ export function activate(api) {
           const tpls = loadTemplates();
           const tpl = resolveExportTemplate(tpls);
           if (!tpl || tpl.enabled === false) {
-            console.log("[safelight-print-mat] no active/enabled template — export left unmodified");
-            return blob; // "Enable print mat" off — leave export untouched
+            return blob; // Enable off — leave export untouched (preview still works in panel)
           }
           try {
             return await renderPrintMat(blob, tpl, photo);
@@ -1115,9 +1174,17 @@ export function activate(api) {
       // this reflects current edits and exactly matches export output.
       if (activeModule === "develop" && developParams && api.develop?.captureFrame) {
         const bitmap = await api.develop.captureFrame(developParams);
-        const cv = new OffscreenCanvas(bitmap.width, bitmap.height);
-        cv.getContext("2d").drawImage(bitmap, 0, 0);
-        return cv.convertToBlob({ type: "image/jpeg", quality: 0.92 });
+        // Downscale capture early — panel preview never needs full-res pixels.
+        const maxCap = 1400;
+        let tw = bitmap.width, th = bitmap.height;
+        if (Math.max(tw, th) > maxCap) {
+          const s = maxCap / Math.max(tw, th);
+          tw = Math.round(tw * s); th = Math.round(th * s);
+        }
+        const cv = new OffscreenCanvas(tw, th);
+        cv.getContext("2d").drawImage(bitmap, 0, 0, tw, th);
+        bitmap.close?.();
+        return cv.convertToBlob({ type: "image/jpeg", quality: 0.85 });
       }
       // Library (or no live session): fall back to the catalog thumbnail.
       // Note: thumbnails don't carry develop edits, so this preview shows
@@ -1136,34 +1203,50 @@ export function activate(api) {
       return canvas.convertToBlob({ type: "image/jpeg" });
     }, [activeModule, developParams, activePhoto]);
 
+    const previewGenRef = useRef(0);
     const generatePreview = useCallback(async () => {
+      const gen = ++previewGenRef.current;
       setPreviewing(true);
       try {
         const blob = await buildPreviewBlob();
+        if (gen !== previewGenRef.current) return; // stale
+        // Panel preview ALWAYS renders current settings — independent of Enable.
         const resultBlob = await renderPrintMat(blob, t, activePhoto || { exif: {
           make: "NIKON CORPORATION", model: "NIKON D5300", lensModel: "70-300mm f/4.5-6.3",
           aperture: 6.3, shutter: 1/640, iso: 100,
-        }, dateCreated: Date.now() });
-        if (previewUrl) URL.revokeObjectURL(previewUrl);
-        setPreviewUrl(URL.createObjectURL(resultBlob));
+        }, dateCreated: Date.now() }, { maxLongEdge: 1400, preview: true });
+        if (gen !== previewGenRef.current) return;
+        setPreviewUrl(prev => {
+          if (prev) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(resultBlob);
+        });
       } catch (err) {
-        console.error("[safelight-print-mat] preview error:", err);
+        if (gen === previewGenRef.current) console.error("[safelight-print-mat] preview error:", err);
       } finally {
-        setPreviewing(false);
+        if (gen === previewGenRef.current) setPreviewing(false);
       }
-    }, [t, activePhoto, previewUrl, buildPreviewBlob]);
+    }, [t, activePhoto, buildPreviewBlob]);
 
-    // Auto-refresh while actively editing in Develop, debounced so a slider
-    // drag doesn't re-render on every tick. Library keeps the manual button
-    // only (no live edit state to react to there).
+    // Auto-refresh panel preview on template edits. When Enable is on, the
+    // Develop overlay already follows edit sliders — don't double-render on
+    // every developParams tick. When Enable is off, still follow Develop edits
+    // in the panel so you can design without the canvas overlay.
     const liveTimerRef = useRef(null);
     useEffect(() => {
-      if (activeModule !== "develop" || !developParams || !api.develop?.captureFrame) return;
       if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
-      liveTimerRef.current = setTimeout(() => { generatePreview(); }, 400);
+      liveTimerRef.current = setTimeout(() => { generatePreview(); }, 450);
       return () => clearTimeout(liveTimerRef.current);
       // eslint-disable-next-line
-    }, [developParams, activeModule, t]);
+    }, [t]);
+
+    useEffect(() => {
+      if (t?.enabled !== false) return; // overlay owns live Develop feedback
+      if (activeModule !== "develop" || !developParams || !api.develop?.captureFrame) return;
+      if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
+      liveTimerRef.current = setTimeout(() => { generatePreview(); }, 550);
+      return () => clearTimeout(liveTimerRef.current);
+      // eslint-disable-next-line
+    }, [developParams, activeModule, t?.enabled]);
 
     const fieldSourceLabel = {
       custom: "Custom text", camera: "Camera (EXIF)", datetime: "Date & time (EXIF)",
@@ -1236,10 +1319,12 @@ export function activate(api) {
       ce("div", { style: S.row },
         ce("label", { style: { ...S.label, cursor: "pointer", display: "flex", alignItems: "center" } },
           ce("input", { type: "checkbox", style: S.checkbox,
-                        checked: t.enabled, onChange: e => update("enabled", e.target.checked) }),
-          "Enable print mat"
+                        checked: t.enabled !== false, onChange: e => update("enabled", e.target.checked) }),
+          "Show in Develop & apply on export"
         )
       ),
+      ce("div", { style: { ...S.label, fontSize: 10, marginBottom: 4, lineHeight: 1.4 } },
+        "Panel preview always shows your current settings. This toggle only controls the Develop canvas overlay and whether framing is applied on export/print."),
 
       ce("hr", { style: S.divider }),
 
@@ -1257,11 +1342,13 @@ export function activate(api) {
             ce("div", { style: {
               ...S.presetSwatch,
               background: p.over.frameStyle ? FRAME_COLORS[p.over.frameStyle] : (p.over.matColor || "#ffffff"),
-              padding: p.over.frameStyle ? 4 : 0,
+              padding: p.over.frameStyle ? (p.over.matEnabled === false ? 6 : 4) : 0,
               display: "flex", alignItems: "center", justifyContent: "center",
             }},
               ce("div", { style: {
-                width: "100%", height: "100%", background: p.over.matColor || "#ffffff",
+                width: "100%", height: "100%",
+                // Frame-only presets show a dark "photo" inset instead of a white mat fill.
+                background: p.over.matEnabled === false ? "#2a2a2a" : (p.over.matColor || "#ffffff"),
                 borderRadius: (p.over.cornerStyle === "rounded" || p.over.cornerStyle === "circle") ? (p.over.cornerStyle === "circle" ? "50%" : 6) : 0,
               }})
             ),
@@ -1338,81 +1425,129 @@ export function activate(api) {
       // ── MAT ──
       tab === "mat" && ce("div", null,
         ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Mat color"),
-          ce("input", { type: "color", style: S.colorInput,
-                        value: t.matColor, onChange: e => update("matColor", e.target.value) })
-        ),
-        ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Texture"),
-          ce("select", { style: S.select, value: t.matTexture,
-                         onChange: e => update("matTexture", e.target.value) },
-            ...TEXTURES.map(tex => ce("option", { key: tex.id, value: tex.id }, tex.label))
-          )
-        ),
-        ce("hr", { style: S.divider }),
-        ce("div", { style: S.row },
           ce("label", { style: { ...S.label, cursor: "pointer", display: "flex", alignItems: "center" } },
             ce("input", { type: "checkbox", style: S.checkbox,
-                          checked: t.linked, onChange: e => update("linked", e.target.checked) }),
-            "Link all sides"
+                          checked: t.matEnabled === false,
+                          onChange: e => update("matEnabled", !e.target.checked) }),
+            "No mat (frame only)"
           )
         ),
-        ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Top (%)"),
-          ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
-                        value: t.matWidthTop, onChange: e => update("matWidthTop", Number(e.target.value)) })
+        ce("div", { style: { ...S.label, fontSize: 10, marginBottom: 8, lineHeight: 1.4 } },
+          t.matEnabled === false
+            ? "Frame sits directly against the photo. Caption text needs a mat band — turn captions off or re-enable the mat."
+            : "Passe-partout around the photo. Uncheck above to use frame only (no mat)."
         ),
-        ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Right (%)"),
-          ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
-                        value: t.matWidthRight, onChange: e => update("matWidthRight", Number(e.target.value)) })
-        ),
-        ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Bottom (%)"),
-          ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
-                        value: t.matWidthBottom, onChange: e => update("matWidthBottom", Number(e.target.value)) })
-        ),
-        ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Left (%)"),
-          ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
-                        value: t.matWidthLeft, onChange: e => update("matWidthLeft", Number(e.target.value)) })
-        ),
-        ce("hr", { style: S.divider }),
-        ce("div", { style: S.sectionTitle }, "Matte Bevel (3D edge)"),
-        ce("div", { style: S.row },
-          ce("label", { style: { ...S.label, cursor: "pointer", display: "flex", alignItems: "center" } },
-            ce("input", { type: "checkbox", style: S.checkbox,
-                          checked: t.matteBevel, onChange: e => update("matteBevel", e.target.checked) }),
-            "Enable matte bevel"
-          )
-        ),
-        t.matteBevel && ce("div", null,
+        t.matEnabled !== false && ce("div", null,
           ce("div", { style: S.row },
-            ce("span", { style: S.label }, "Bevel size (%)"),
-            ce("input", { style: S.input, type: "number", min: 0.1, max: 3, step: 0.1,
-                          value: t.matteBevelSize, onChange: e => update("matteBevelSize", Number(e.target.value)) })
+            ce("span", { style: S.label }, "Mat color"),
+            ce("input", { type: "color", style: S.colorInput,
+                          value: t.matColor, onChange: e => update("matColor", e.target.value) })
           ),
           ce("div", { style: S.row },
-            ce("span", { style: S.label }, "Strength (%)"),
-            ce("input", { style: S.input, type: "number", min: 0, max: 100,
-                          value: t.matteBevelStrength, onChange: e => update("matteBevelStrength", Number(e.target.value)) })
+            ce("span", { style: S.label }, "Texture"),
+            ce("select", { style: S.select, value: t.matTexture,
+                           onChange: e => update("matTexture", e.target.value) },
+              ...TEXTURES.map(tex => ce("option", { key: tex.id, value: tex.id }, tex.label))
+            )
+          ),
+          ce("hr", { style: S.divider }),
+          ce("div", { style: S.row },
+            ce("label", { style: { ...S.label, cursor: "pointer", display: "flex", alignItems: "center" } },
+              ce("input", { type: "checkbox", style: S.checkbox,
+                            checked: t.linked, onChange: e => update("linked", e.target.checked) }),
+              "Link all sides"
+            )
+          ),
+          ce("div", { style: S.row },
+            ce("span", { style: S.label }, "Top (%)"),
+            ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
+                          value: t.matWidthTop, onChange: e => update("matWidthTop", Number(e.target.value)) })
+          ),
+          ce("div", { style: S.row },
+            ce("span", { style: S.label }, "Right (%)"),
+            ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
+                          value: t.matWidthRight, onChange: e => update("matWidthRight", Number(e.target.value)) })
+          ),
+          ce("div", { style: S.row },
+            ce("span", { style: S.label }, "Bottom (%)"),
+            ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
+                          value: t.matWidthBottom, onChange: e => update("matWidthBottom", Number(e.target.value)) })
+          ),
+          ce("div", { style: S.row },
+            ce("span", { style: S.label }, "Left (%)"),
+            ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
+                          value: t.matWidthLeft, onChange: e => update("matWidthLeft", Number(e.target.value)) })
+          ),
+          ce("hr", { style: S.divider }),
+          ce("div", { style: S.sectionTitle }, "Matte Bevel (3D edge)"),
+          ce("div", { style: S.row },
+            ce("label", { style: { ...S.label, cursor: "pointer", display: "flex", alignItems: "center" } },
+              ce("input", { type: "checkbox", style: S.checkbox,
+                            checked: t.matteBevel, onChange: e => update("matteBevel", e.target.checked) }),
+              "Enable matte bevel"
+            )
+          ),
+          t.matteBevel && ce("div", null,
+            ce("div", { style: S.row },
+              ce("span", { style: S.label }, "Bevel size (%)"),
+              ce("input", { style: S.input, type: "number", min: 0.1, max: 3, step: 0.1,
+                            value: t.matteBevelSize, onChange: e => update("matteBevelSize", Number(e.target.value)) })
+            ),
+            ce("div", { style: S.row },
+              ce("span", { style: S.label }, "Strength (%)"),
+              ce("input", { style: S.input, type: "number", min: 0, max: 100,
+                            value: t.matteBevelStrength, onChange: e => update("matteBevelStrength", Number(e.target.value)) })
+            ),
           ),
         ),
+        t.matEnabled === false && !isFrameOn(t) && ce("div", { style: { ...S.label, fontSize: 10, color: "var(--color-accent)", marginTop: 6 } },
+          "Tip: uncheck \"No frame\" on the Frame tab — otherwise there is neither mat nor frame."),
       ),
 
       // ── FRAME ──
       tab === "frame" && ce("div", null,
         ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Frame style"),
-          ce("select", { style: S.select, value: t.frameStyle,
-                         onChange: e => update("frameStyle", e.target.value) },
-            ...FRAME_STYLES.map(f => ce("option", { key: f.id, value: f.id }, f.label))
+          ce("label", { style: { ...S.label, cursor: "pointer", display: "flex", alignItems: "center" } },
+            ce("input", { type: "checkbox", style: S.checkbox,
+                          checked: !isFrameOn(t),
+                          onChange: e => {
+                            if (e.target.checked) {
+                              update("frameEnabled", false);
+                            } else {
+                              // Restore frame; upgrade legacy "none" style to black.
+                              setTemplates(prev => {
+                                const next = prev.map((x, i) => {
+                                  if (i !== activeIdx) return x;
+                                  const style = (!x.frameStyle || x.frameStyle === "none") ? "black" : x.frameStyle;
+                                  return { ...x, frameEnabled: true, frameStyle: style };
+                                });
+                                saveTemplates(next);
+                                return next;
+                              });
+                            }
+                          } }),
+            "No frame (mat only)"
           )
         ),
-        t.frameStyle !== "none" && ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Frame width (%)"),
-          ce("input", { style: S.input, type: "number", min: 0.2, max: 8, step: 0.1,
-                        value: t.frameWidth, onChange: e => update("frameWidth", Number(e.target.value)) })
+        ce("div", { style: { ...S.label, fontSize: 10, marginBottom: 8, lineHeight: 1.4 } },
+          isFrameOn(t)
+            ? "Outer frame around the mat (or around the photo when mat is off)."
+            : "Mat-only look. Uncheck above to add a frame."
+        ),
+        isFrameOn(t) && ce("div", null,
+          ce("div", { style: S.row },
+            ce("span", { style: S.label }, "Frame color"),
+            ce("select", { style: S.select,
+                           value: (t.frameStyle === "none" ? "black" : t.frameStyle) || "black",
+                           onChange: e => update("frameStyle", e.target.value) },
+              ...FRAME_STYLES.map(f => ce("option", { key: f.id, value: f.id }, f.label))
+            )
+          ),
+          ce("div", { style: S.row },
+            ce("span", { style: S.label }, "Frame width (%)"),
+            ce("input", { style: S.input, type: "number", min: 0.2, max: 8, step: 0.1,
+                          value: t.frameWidth, onChange: e => update("frameWidth", Number(e.target.value)) })
+          ),
         ),
         ce("hr", { style: S.divider }),
         ce("div", { style: S.sectionTitle }, "Corners"),
@@ -1607,12 +1742,18 @@ export function activate(api) {
         )),
         ce("button", { style: { ...S.btn, width: "100%", marginBottom: 10 }, onClick: addField }, "+ Add text field"),
         (() => {
+          const enabledFields = t.textFields.filter(f => f.enabled);
+          if (t.matEnabled === false && enabledFields.length) {
+            return ce("div", { style: { ...S.label, color: "var(--color-accent)", marginBottom: 10, lineHeight: 1.4 } },
+              "⚠ Caption text needs a mat band. With \"No mat (frame only)\" enabled, captions won't have room — disable them or turn the mat back on."
+            );
+          }
           // Heuristic, panel-side check (mirrors the render-time math in % terms,
           // since both font size and mat width are percentages of the photo's
           // long edge — the actual pixel size cancels out). Warns *before*
           // export/preview instead of only fixing it silently afterwards.
           const groups = {};
-          t.textFields.filter(f => f.enabled).forEach(f => {
+          enabledFields.forEach(f => {
             (groups[f.anchor] = groups[f.anchor] || []).push(f);
           });
           const overflowing = Object.entries(groups).filter(([anchor, fields]) => {
@@ -1664,15 +1805,16 @@ export function activate(api) {
     const [renderedUrl, setRenderedUrl] = useState(null);
     const renderedUrlRef = useRef(null);
     const debounceRef = useRef(null);
+    const overlayGenRef = useRef(0);
 
-    // Template edits happen in the panel (a separate React tree/instance),
-    // so — consistent with how the other Print Mat-family extensions share
-    // state — poll the persisted template rather than relying on React state.
+    // Template edits happen in the panel (a separate React tree/instance).
+    // Prefer the in-memory cache (updated immediately on edits); fall back to
+    // a light poll so we still pick up changes if the panel remounts.
     useEffect(() => {
       const id = setInterval(() => {
         const next = resolveExportTemplate(loadTemplates());
-        setTpl(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
-      }, 500);
+        setTpl(prev => (prev === next || JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+      }, 750);
       return () => clearInterval(id);
     }, []);
 
@@ -1694,27 +1836,54 @@ export function activate(api) {
     const overlay = api.develop.useDevelopOverlay();
     const rect = overlay?.rect;
 
-    // Debounced full render through the exact same path as Generate Preview/export.
+    // Debounced downscaled render for the Develop canvas overlay.
+    // Enable gate: when off, show nothing here (panel preview still works).
     useEffect(() => {
-      if (!developParams || !tpl || tpl.enabled === false || !api.develop?.captureFrame) return;
+      if (!developParams || !tpl || tpl.enabled === false || !api.develop?.captureFrame) {
+        if (tpl?.enabled === false && renderedUrlRef.current) {
+          URL.revokeObjectURL(renderedUrlRef.current);
+          renderedUrlRef.current = null;
+          setRenderedUrl(null);
+        }
+        return;
+      }
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      const gen = ++overlayGenRef.current;
       debounceRef.current = setTimeout(async () => {
         try {
           const bitmap = await api.develop.captureFrame(developParams);
-          const cv = new OffscreenCanvas(bitmap.width, bitmap.height);
-          cv.getContext("2d").drawImage(bitmap, 0, 0);
-          const blob = await cv.convertToBlob({ type: "image/jpeg", quality: 0.92 });
-          const resultBlob = await renderPrintMat(blob, tpl, photo || { exif: {}, dateCreated: Date.now() });
+          if (gen !== overlayGenRef.current) { bitmap.close?.(); return; }
+          // Render near display resolution — overlay is scaled to rect anyway.
+          const dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
+          const displayLong = Math.max(rect?.w || 900, rect?.h || 900) * dpr;
+          const maxLongEdge = Math.min(1600, Math.max(720, Math.round(displayLong * 1.15)));
+          let tw = bitmap.width, th = bitmap.height;
+          if (Math.max(tw, th) > maxLongEdge) {
+            const s = maxLongEdge / Math.max(tw, th);
+            tw = Math.round(tw * s); th = Math.round(th * s);
+          }
+          const cv = new OffscreenCanvas(tw, th);
+          cv.getContext("2d").drawImage(bitmap, 0, 0, tw, th);
+          bitmap.close?.();
+          const blob = await cv.convertToBlob({ type: "image/jpeg", quality: 0.82 });
+          if (gen !== overlayGenRef.current) return;
+          const resultBlob = await renderPrintMat(
+            blob, tpl, photo || { exif: {}, dateCreated: Date.now() },
+            { maxLongEdge, preview: true }
+          );
+          if (gen !== overlayGenRef.current) return;
           const url = URL.createObjectURL(resultBlob);
           if (renderedUrlRef.current) URL.revokeObjectURL(renderedUrlRef.current);
           renderedUrlRef.current = url;
           setRenderedUrl(url);
         } catch (err) {
-          console.error("[safelight-print-mat] develop overlay render error:", err);
+          if (gen === overlayGenRef.current) {
+            console.error("[safelight-print-mat] develop overlay render error:", err);
+          }
         }
-      }, 400);
+      }, 550);
       return () => clearTimeout(debounceRef.current);
-    }, [developParams, tpl, photo]);
+    }, [developParams, tpl, photo, rect?.w, rect?.h]);
 
     useEffect(() => () => { if (renderedUrlRef.current) URL.revokeObjectURL(renderedUrlRef.current); }, []);
 
@@ -1722,11 +1891,13 @@ export function activate(api) {
 
     const long  = Math.max(rect.w, rect.h);
     const short = Math.min(rect.w, rect.h);
-    const frameW    = tpl.frameStyle !== "none" ? long * (tpl.frameWidth / 100) : 0;
-    const matTop    = long * (tpl.matWidthTop    / 100);
-    const matRight  = long * (tpl.matWidthRight  / 100);
-    const matBottom = long * (tpl.matWidthBottom / 100);
-    const matLeft   = long * (tpl.matWidthLeft   / 100);
+    const frameW    = isFrameOn(tpl) ? long * (tpl.frameWidth / 100) : 0;
+    // Overlay placeholder uses the same mat-off → zero insets rule as export.
+    const matScale = tpl.matEnabled === false ? 0 : 1;
+    const matTop    = long * (tpl.matWidthTop    / 100) * matScale;
+    const matRight  = long * (tpl.matWidthRight  / 100) * matScale;
+    const matBottom = long * (tpl.matWidthBottom / 100) * matScale;
+    const matLeft   = long * (tpl.matWidthLeft   / 100) * matScale;
     const cornerR   = tpl.cornerStyle === "rounded" ? short * (tpl.cornerRadius / 100) : 0;
     const outerW = rect.w + matLeft + matRight + frameW * 2;
     const outerH = rect.h + matTop + matBottom + frameW * 2;
@@ -1735,7 +1906,7 @@ export function activate(api) {
     const outerTop  = rect.y - matTop - frameW;
 
     if (renderedUrl) {
-      // Full, pixel-accurate framed result — same render export would produce.
+      // Framed result scaled to the Develop rect (rendered at display-ish res).
       return ce("img", {
         src: renderedUrl,
         style: {
@@ -1748,24 +1919,26 @@ export function activate(api) {
 
     // Before the first render completes: a lightweight solid-color placeholder
     // outline, so there's still some immediate visual feedback.
-    const matBoxStyle = {
+    const matOn = tpl.matEnabled !== false && (matTop + matRight + matBottom + matLeft) > 0;
+    const matBoxStyle = matOn ? {
       position: "absolute", pointerEvents: "none", boxSizing: "border-box",
       left: rect.x - matLeft, top: rect.y - matTop,
       width: rect.w + matLeft + matRight, height: rect.h + matTop + matBottom,
       borderStyle: "solid", borderColor: tpl.matColor || "#ffffff",
       borderWidth: `${matTop}px ${matRight}px ${matBottom}px ${matLeft}px`,
       borderRadius: cornerR ? cornerR + Math.max(matTop, matRight, matBottom, matLeft) : 0,
-    };
+    } : null;
+    const frameStyleKey = effectiveFrameStyle(tpl);
     const frameBoxStyle = frameW > 0 ? {
       position: "absolute", pointerEvents: "none", boxSizing: "border-box",
       left: outerLeft, top: outerTop, width: outerW, height: outerH,
-      borderStyle: "solid", borderColor: FRAME_COLORS[tpl.frameStyle] || "#1a1a1a", borderWidth: frameW,
+      borderStyle: "solid", borderColor: FRAME_COLORS[frameStyleKey] || "#1a1a1a", borderWidth: frameW,
       borderRadius: outerRadius,
     } : null;
 
     return ce("div", { style: { position: "absolute", inset: 0, pointerEvents: "none" } },
       frameBoxStyle && ce("div", { style: frameBoxStyle }),
-      ce("div", { style: matBoxStyle }),
+      matBoxStyle && ce("div", { style: matBoxStyle }),
     );
   }
 
