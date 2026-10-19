@@ -25,7 +25,8 @@ A complete photo framing toolkit for [Safelight](https://github.com/anthonyreimc
 - **Matte Bevel** — adjustable 3D ridge around the photo, inset into the mat
 
 ### Frame
-- 5 styles: none, black, brown, white, gold — with bevel highlight
+- **No frame (mat only)** — disable the outer frame independently of the mat (mirrors No mat)
+- 4 colors when enabled: black, brown, white, gold — with bevel highlight
 - Adjustable width
 - **Corners**: sharp, rounded (mat + frame), rounded (photo only), or circle
 
@@ -47,6 +48,11 @@ Unlimited fields: Custom text, Camera (EXIF), Date & time (EXIF), Lens (EXIF), E
 - Live preview on the selected photo or a sample image
 
 ## Changelog
+
+### 1.2.0 — Frame toggle, preview vs Enable, faster live path
+- **No frame (mat only)** toggle on the Frame tab — same pattern as No mat
+- **Show in Develop & apply on export** (renamed Enable) no longer blocks panel preview — preview always shows current settings
+- Faster preview/overlay: downscaled renders, lighter textures, stale-render cancel, less double-work when Develop overlay is on, debounced saves
 
 ### 1.1.0 — No mat (frame only)
 - **No mat (frame only)** toggle on the Mat tab — frame sits directly against the photo (saved mat widths/colors kept for when you re-enable)
