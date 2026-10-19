@@ -2,7 +2,7 @@
   "id": "safelight-print-mat",
   "name": "Print Mat",
   "version": "1.2.0",
-  "description": "Complete photo framing toolkit: canvas system, photo scale, crop ratios, independent No mat / No frame toggles, matte bevel, frame colors + ratio, sharp/rounded/circle corners, directional frame & internal shadows with Match Lighting, 7 procedural textures, EXIF captions, panel preview always on, Develop overlay + export gated by Enable, live Develop preview, save/reset defaults.",
+  "description": "Complete photo framing toolkit: canvas system, photo scale, crop ratios, independent No mat / No frame toggles, matte bevel, frame colors + ratio, sharp/rounded/circle corners, directional frame & internal shadows with Match Lighting, 7 procedural textures, EXIF captions, panel preview always on, Develop overlay toggle, Export panel Apply + Template settings, live Develop preview, save/reset defaults.",
   "author": "OPGERUIMD97",
   "main": "dist/index.js",
   "categories": "Export"

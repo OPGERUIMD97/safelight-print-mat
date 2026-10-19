@@ -3,7 +3,8 @@
 // Canvas system, photo scale, mat + bevel, frame + ratio, rounded/circle corners,
 // directional shadows (frame + internal), textures, EXIF captions, defaults.
 // Mat/frame can each be disabled independently ("No mat" / "No frame").
-// Panel preview always reflects current settings; "Enable" controls Develop + export.
+// Panel preview always reflects current settings; template "enabled" = Develop overlay.
+// Export panel has its own Apply + Template settings (not "No settings.").
 
 const STORAGE_KEY  = "safelight-print-mat-templates";
 const DEFAULTS_KEY = "safelight-print-mat-user-defaults";
@@ -930,8 +931,41 @@ async function renderPrintMat(blob, template, photo, options = {}) {
   return canvas.convertToBlob({ type: "image/jpeg", quality: q });
 }
 
+// ── Export panel settings ─────────────────────────────────────────────────────
+// Shown under "Print Mat" in Safelight's core Export panel (instead of
+// "No settings."). Lets you see/override per export which template is used
+// and whether framing is applied — without opening this extension's panel.
+// Independent of each template's "Show in Develop" checkbox (that only
+// controls the live Develop overlay).
+function getProcessorFields(tpls) {
+  if (!tpls || !tpls.length) return [];
+  const active = resolveExportTemplate(tpls);
+  const activeOn = active?.enabled !== false;
+  return [
+    {
+      key: "enabled",
+      type: "boolean",
+      label: "Apply print mat",
+      hint: activeOn
+        ? `Active template: ${active?.name || "—"}`
+        : `Active template: ${active?.name || "—"} (Develop overlay off)`,
+      default: true,
+    },
+    {
+      key: "template",
+      type: "select",
+      label: "Template",
+      options: tpls.map(t => ({
+        value: t.id,
+        label: t.enabled === false ? `${t.name} (Develop off)` : t.name,
+      })),
+      default: active ? active.id : tpls[0].id,
+    },
+  ];
+}
+
 // ── Activation ─────────────────────────────────────────────────────────────────
-  export function activate(api) {
+export function activate(api) {
   console.log("%c[safelight-print-mat] extension loaded — v1.2.0", "color:#C15F3C;font-weight:bold");
   const { react: React, stores } = api;
   const { useState, useEffect, useCallback, useRef } = React;
@@ -1147,17 +1181,21 @@ async function renderPrintMat(blob, template, photo, options = {}) {
       });
     };
 
+    // Re-register whenever templates change so the Export panel Template
+    // dropdown stays in sync (and never shows the empty "No settings." state).
     useEffect(() => {
       return api.registerExportProcessor({
         id: "safelight-print-mat.processor",
         label: "Print Mat",
-        async process(blob, photo) {
-          console.log("[safelight-print-mat] export processor invoked for", photo?.filename || "(unknown photo)");
+        settings: getProcessorFields(templates),
+        async process(blob, photo, settings) {
+          // Export panel toggle/dropdown are the source of truth for export —
+          // independent of the panel's "Show in Develop" checkbox.
+          if (settings?.enabled === false) return blob;
           const tpls = loadTemplates();
-          const tpl = resolveExportTemplate(tpls);
-          if (!tpl || tpl.enabled === false) {
-            return blob; // Enable off — leave export untouched (preview still works in panel)
-          }
+          const tpl = (settings?.template && tpls.find(x => x.id === settings.template))
+            || resolveExportTemplate(tpls);
+          if (!tpl) return blob;
           try {
             return await renderPrintMat(blob, tpl, photo);
           } catch (err) {
@@ -1166,7 +1204,7 @@ async function renderPrintMat(blob, template, photo, options = {}) {
           }
         },
       });
-    }, []);
+    }, [templates]);
 
     const buildPreviewBlob = useCallback(async () => {
       // In Develop, with a live edit session for the active photo, render
@@ -1320,11 +1358,11 @@ async function renderPrintMat(blob, template, photo, options = {}) {
         ce("label", { style: { ...S.label, cursor: "pointer", display: "flex", alignItems: "center" } },
           ce("input", { type: "checkbox", style: S.checkbox,
                         checked: t.enabled !== false, onChange: e => update("enabled", e.target.checked) }),
-          "Show in Develop & apply on export"
+          "Show in Develop"
         )
       ),
       ce("div", { style: { ...S.label, fontSize: 10, marginBottom: 4, lineHeight: 1.4 } },
-        "Panel preview always shows your current settings. This toggle only controls the Develop canvas overlay and whether framing is applied on export/print."),
+        "Live overlay on the Develop canvas. Export has its own Apply + Template controls under Print Mat — panel preview always shows current settings."),
 
       ce("hr", { style: S.divider }),
 

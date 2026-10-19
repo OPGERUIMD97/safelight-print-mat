@@ -49,9 +49,10 @@ Unlimited fields: Custom text, Camera (EXIF), Date & time (EXIF), Lens (EXIF), E
 
 ## Changelog
 
-### 1.2.0 — Frame toggle, preview vs Enable, faster live path
+### 1.2.0 — Frame toggle, Export settings, faster live path
 - **No frame (mat only)** toggle on the Frame tab — same pattern as No mat
-- **Show in Develop & apply on export** (renamed Enable) no longer blocks panel preview — preview always shows current settings
+- **Show in Develop** controls the Develop overlay only; panel preview always shows current settings
+- Export panel **Print Mat** section now shows **Apply print mat** + **Template** (no more "No settings.")
 - Faster preview/overlay: downscaled renders, lighter textures, stale-render cancel, less double-work when Develop overlay is on, debounced saves
 
 ### 1.1.0 — No mat (frame only)
