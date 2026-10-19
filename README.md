@@ -5,7 +5,7 @@ A complete photo framing toolkit for [Safelight](https://github.com/anthonyreimc
 ## Features
 
 ### 🖼 Presets tab
-- 9 ready-made presets: Classic Mat, Black/Brown Frame + Mat, Rounded Black Frame, White Passe-Partout, Rounded White Mat, Instant Film (Square), Circle Frame, Floating on Canvas
+- 10 ready-made presets: Classic Mat, Black/Brown Frame + Mat, Black Frame Only, Rounded Black Frame, White Passe-Partout, Rounded White Mat, Instant Film (Square), Circle Frame, Floating on Canvas
 - 6 mat texture presets: Blue Grass, Green Lawn, Linen, Wood Grain, Red Felt, Turquoise Terrazzo
 - **↺ Reset to Defaults** / **💾 Save as Defaults** — set your own starting point for new templates
 
@@ -21,6 +21,7 @@ A complete photo framing toolkit for [Safelight](https://github.com/anthonyreimc
 ### Mat
 - Custom color + 7 procedural textures (linen, felt, wood, terrazzo, grass, paper, solid) — all canvas-generated
 - Per-side width, or linked for equal margins
+- **No mat (frame only)** — disable the passe-partout so the frame sits directly against the photo (Darktable-style solid border)
 - **Matte Bevel** — adjustable 3D ridge around the photo, inset into the mat
 
 ### Frame
@@ -46,6 +47,12 @@ Unlimited fields: Custom text, Camera (EXIF), Date & time (EXIF), Lens (EXIF), E
 - Live preview on the selected photo or a sample image
 
 ## Changelog
+
+### 1.1.0 — No mat (frame only)
+- **No mat (frame only)** toggle on the Mat tab — frame sits directly against the photo (saved mat widths/colors kept for when you re-enable)
+- New preset: **Black Frame Only**
+- Caption warning when mat is off (captions need a mat band)
+- Tip when both mat and frame are off
 
 ### 1.0.0 — Initial release
 First public release. Highlights:

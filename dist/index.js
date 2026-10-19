@@ -1,7 +1,8 @@
-// Safelight Print Mat Extension v1.0.0
+// Safelight Print Mat Extension v1.1.0
 // Complete photo framing toolkit:
 // Canvas system, photo scale, mat + bevel, frame + ratio, rounded/circle corners,
 // directional shadows (frame + internal), textures, EXIF captions, defaults.
+// Mat can be disabled for a Darktable-style "frame only" look.
 
 const STORAGE_KEY  = "safelight-print-mat-templates";
 const DEFAULTS_KEY = "safelight-print-mat-user-defaults";
@@ -141,7 +142,8 @@ function freshTemplate() {
     // Photo scale (how much of the canvas the framed photo occupies)
     photoScale: 100,    // 5-100 %, only relevant when canvasRatio !== "auto"
 
-    // Mat
+    // Mat (passe-partout). Set matEnabled false for "No mat (frame only)".
+    matEnabled: true,
     matColor: "#ffffff",
     matTexture: "solid",
     matWidthTop:    4,
@@ -191,6 +193,7 @@ const PRESETS = [
   { name: "Classic Mat",           over: {} },
   { name: "Black Frame + Mat",     over: { frameStyle: "black", frameWidth: 1.2, matWidthBottom: 4 } },
   { name: "Brown Frame + Mat",     over: { frameStyle: "brown", frameWidth: 1.5, matWidthBottom: 4 } },
+  { name: "Black Frame Only",      over: { matEnabled: false, frameStyle: "black", frameWidth: 2, matteBevel: false, textFields: [] } },
   { name: "Rounded Black Frame",   over: { frameStyle: "black", cornerStyle: "rounded", cornerRadius: 4, matWidthBottom: 4 } },
   { name: "White Passe-Partout",   over: { matColor: "#ffffff", matWidthBottom: 4, textFields: [] } },
   { name: "Rounded White Mat",     over: { matColor: "#ffffff", cornerStyle: "rounded", cornerRadius: 3, matWidthBottom: 4, textFields: [] } },
@@ -198,6 +201,22 @@ const PRESETS = [
   { name: "Circle Frame",          over: { matColor: "#ffffff", cornerStyle: "circle", cropRatio: "1:1", matWidthBottom: 4, textFields: [] } },
   { name: "Floating on Canvas",    over: { canvasRatio: "1:1", canvasColor: "#e8e4dc", photoScale: 78, frameShadow: true, frameShadowOpacity: 30, matWidthBottom: 4, textFields: [] } },
 ];
+
+// Effective mat insets for layout/render. When mat is off, widths are 0 so the
+// frame (if any) sits directly against the photo — "No mat (frame only)".
+// Missing matEnabled (older saved templates) is treated as enabled.
+function effectiveMatInsets(template, long) {
+  if (template.matEnabled === false) {
+    return { matTop: 0, matRight: 0, matBottom: 0, matLeft: 0 };
+  }
+  const scale = (v) => Math.round(long * ((v || 0) / 100));
+  return {
+    matTop:    scale(template.matWidthTop),
+    matRight:  scale(template.matWidthRight),
+    matBottom: scale(template.matWidthBottom),
+    matLeft:   scale(template.matWidthLeft),
+  };
+}
 
 function buildPreset(over) {
   return { ...freshTemplate(), ...over,
@@ -612,10 +631,8 @@ async function renderPrintMat(blob, template, photo) {
   const isCircle = template.cornerStyle === "circle";
 
   const frameW = template.frameStyle !== "none" ? Math.round(long * (template.frameWidth / 100)) : 0;
-  const matTop    = Math.round(long * (template.matWidthTop    / 100));
-  const matRight  = Math.round(long * (template.matWidthRight  / 100));
-  const matBottom = Math.round(long * (template.matWidthBottom / 100));
-  const matLeft   = Math.round(long * (template.matWidthLeft   / 100));
+  const { matTop, matRight, matBottom, matLeft } = effectiveMatInsets(template, long);
+  const matOn = template.matEnabled !== false;
 
   // Framed unit size (photo + mat + frame)
   let unitW = photoW + matLeft + matRight  + frameW * 2;
@@ -702,23 +719,27 @@ async function renderPrintMat(blob, template, photo) {
     ctx.fillRect(ux, uy, unitW, unitH);
   }
 
-  const matX = ux + frameW, matY = uy + frameW;
-  const matW = unitW - frameW * 2, matH = unitH - frameW * 2;
-  applyTexture(ctx, matX, matY, matW, matH, template.matTexture, template.matColor);
+  // Mat fill only when passe-partout is enabled (and has area beyond the photo).
+  // With "No mat (frame only)" the frame (if any) sits directly against the photo.
+  if (matOn) {
+    const matX = ux + frameW, matY = uy + frameW;
+    const matW = unitW - frameW * 2, matH = unitH - frameW * 2;
+    applyTexture(ctx, matX, matY, matW, matH, template.matTexture, template.matColor);
 
-  // Matte bevel — subtle 3D ridge around the photo, inset into the mat
-  if (template.matteBevel) {
-    const bevelSize = Math.max(1, long * (template.matteBevelSize / 100));
-    const strength = (template.matteBevelStrength || 50) / 100;
-    const photoX = ux + frameW + matLeft, photoY = uy + frameW + matTop;
-    ctx.save();
-    ctx.strokeStyle = `rgba(255,255,255,${0.5 * strength})`;
-    ctx.lineWidth = bevelSize;
-    ctx.strokeRect(photoX - bevelSize/2, photoY - bevelSize/2, photoW + bevelSize, photoH + bevelSize);
-    ctx.strokeStyle = `rgba(0,0,0,${0.35 * strength})`;
-    ctx.lineWidth = bevelSize * 0.6;
-    ctx.strokeRect(photoX - bevelSize, photoY - bevelSize, photoW + bevelSize*2, photoH + bevelSize*2);
-    ctx.restore();
+    // Matte bevel — subtle 3D ridge around the photo, inset into the mat
+    if (template.matteBevel) {
+      const bevelSize = Math.max(1, long * (template.matteBevelSize / 100));
+      const strength = (template.matteBevelStrength || 50) / 100;
+      const photoX = ux + frameW + matLeft, photoY = uy + frameW + matTop;
+      ctx.save();
+      ctx.strokeStyle = `rgba(255,255,255,${0.5 * strength})`;
+      ctx.lineWidth = bevelSize;
+      ctx.strokeRect(photoX - bevelSize/2, photoY - bevelSize/2, photoW + bevelSize, photoH + bevelSize);
+      ctx.strokeStyle = `rgba(0,0,0,${0.35 * strength})`;
+      ctx.lineWidth = bevelSize * 0.6;
+      ctx.strokeRect(photoX - bevelSize, photoY - bevelSize, photoW + bevelSize*2, photoH + bevelSize*2);
+      ctx.restore();
+    }
   }
 
   ctx.restore();
@@ -1257,11 +1278,13 @@ export function activate(api) {
             ce("div", { style: {
               ...S.presetSwatch,
               background: p.over.frameStyle ? FRAME_COLORS[p.over.frameStyle] : (p.over.matColor || "#ffffff"),
-              padding: p.over.frameStyle ? 4 : 0,
+              padding: p.over.frameStyle ? (p.over.matEnabled === false ? 6 : 4) : 0,
               display: "flex", alignItems: "center", justifyContent: "center",
             }},
               ce("div", { style: {
-                width: "100%", height: "100%", background: p.over.matColor || "#ffffff",
+                width: "100%", height: "100%",
+                // Frame-only presets show a dark "photo" inset instead of a white mat fill.
+                background: p.over.matEnabled === false ? "#2a2a2a" : (p.over.matColor || "#ffffff"),
                 borderRadius: (p.over.cornerStyle === "rounded" || p.over.cornerStyle === "circle") ? (p.over.cornerStyle === "circle" ? "50%" : 6) : 0,
               }})
             ),
@@ -1338,66 +1361,83 @@ export function activate(api) {
       // ── MAT ──
       tab === "mat" && ce("div", null,
         ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Mat color"),
-          ce("input", { type: "color", style: S.colorInput,
-                        value: t.matColor, onChange: e => update("matColor", e.target.value) })
-        ),
-        ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Texture"),
-          ce("select", { style: S.select, value: t.matTexture,
-                         onChange: e => update("matTexture", e.target.value) },
-            ...TEXTURES.map(tex => ce("option", { key: tex.id, value: tex.id }, tex.label))
-          )
-        ),
-        ce("hr", { style: S.divider }),
-        ce("div", { style: S.row },
           ce("label", { style: { ...S.label, cursor: "pointer", display: "flex", alignItems: "center" } },
             ce("input", { type: "checkbox", style: S.checkbox,
-                          checked: t.linked, onChange: e => update("linked", e.target.checked) }),
-            "Link all sides"
+                          checked: t.matEnabled === false,
+                          onChange: e => update("matEnabled", !e.target.checked) }),
+            "No mat (frame only)"
           )
         ),
-        ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Top (%)"),
-          ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
-                        value: t.matWidthTop, onChange: e => update("matWidthTop", Number(e.target.value)) })
+        ce("div", { style: { ...S.label, fontSize: 10, marginBottom: 8, lineHeight: 1.4 } },
+          t.matEnabled === false
+            ? "Frame sits directly against the photo. Caption text needs a mat band — turn captions off or re-enable the mat."
+            : "Passe-partout around the photo. Uncheck above to use frame only (no mat)."
         ),
-        ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Right (%)"),
-          ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
-                        value: t.matWidthRight, onChange: e => update("matWidthRight", Number(e.target.value)) })
-        ),
-        ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Bottom (%)"),
-          ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
-                        value: t.matWidthBottom, onChange: e => update("matWidthBottom", Number(e.target.value)) })
-        ),
-        ce("div", { style: S.row },
-          ce("span", { style: S.label }, "Left (%)"),
-          ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
-                        value: t.matWidthLeft, onChange: e => update("matWidthLeft", Number(e.target.value)) })
-        ),
-        ce("hr", { style: S.divider }),
-        ce("div", { style: S.sectionTitle }, "Matte Bevel (3D edge)"),
-        ce("div", { style: S.row },
-          ce("label", { style: { ...S.label, cursor: "pointer", display: "flex", alignItems: "center" } },
-            ce("input", { type: "checkbox", style: S.checkbox,
-                          checked: t.matteBevel, onChange: e => update("matteBevel", e.target.checked) }),
-            "Enable matte bevel"
-          )
-        ),
-        t.matteBevel && ce("div", null,
+        t.matEnabled !== false && ce("div", null,
           ce("div", { style: S.row },
-            ce("span", { style: S.label }, "Bevel size (%)"),
-            ce("input", { style: S.input, type: "number", min: 0.1, max: 3, step: 0.1,
-                          value: t.matteBevelSize, onChange: e => update("matteBevelSize", Number(e.target.value)) })
+            ce("span", { style: S.label }, "Mat color"),
+            ce("input", { type: "color", style: S.colorInput,
+                          value: t.matColor, onChange: e => update("matColor", e.target.value) })
           ),
           ce("div", { style: S.row },
-            ce("span", { style: S.label }, "Strength (%)"),
-            ce("input", { style: S.input, type: "number", min: 0, max: 100,
-                          value: t.matteBevelStrength, onChange: e => update("matteBevelStrength", Number(e.target.value)) })
+            ce("span", { style: S.label }, "Texture"),
+            ce("select", { style: S.select, value: t.matTexture,
+                           onChange: e => update("matTexture", e.target.value) },
+              ...TEXTURES.map(tex => ce("option", { key: tex.id, value: tex.id }, tex.label))
+            )
+          ),
+          ce("hr", { style: S.divider }),
+          ce("div", { style: S.row },
+            ce("label", { style: { ...S.label, cursor: "pointer", display: "flex", alignItems: "center" } },
+              ce("input", { type: "checkbox", style: S.checkbox,
+                            checked: t.linked, onChange: e => update("linked", e.target.checked) }),
+              "Link all sides"
+            )
+          ),
+          ce("div", { style: S.row },
+            ce("span", { style: S.label }, "Top (%)"),
+            ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
+                          value: t.matWidthTop, onChange: e => update("matWidthTop", Number(e.target.value)) })
+          ),
+          ce("div", { style: S.row },
+            ce("span", { style: S.label }, "Right (%)"),
+            ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
+                          value: t.matWidthRight, onChange: e => update("matWidthRight", Number(e.target.value)) })
+          ),
+          ce("div", { style: S.row },
+            ce("span", { style: S.label }, "Bottom (%)"),
+            ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
+                          value: t.matWidthBottom, onChange: e => update("matWidthBottom", Number(e.target.value)) })
+          ),
+          ce("div", { style: S.row },
+            ce("span", { style: S.label }, "Left (%)"),
+            ce("input", { style: S.input, type: "number", min: 0, max: 30, step: 0.5,
+                          value: t.matWidthLeft, onChange: e => update("matWidthLeft", Number(e.target.value)) })
+          ),
+          ce("hr", { style: S.divider }),
+          ce("div", { style: S.sectionTitle }, "Matte Bevel (3D edge)"),
+          ce("div", { style: S.row },
+            ce("label", { style: { ...S.label, cursor: "pointer", display: "flex", alignItems: "center" } },
+              ce("input", { type: "checkbox", style: S.checkbox,
+                            checked: t.matteBevel, onChange: e => update("matteBevel", e.target.checked) }),
+              "Enable matte bevel"
+            )
+          ),
+          t.matteBevel && ce("div", null,
+            ce("div", { style: S.row },
+              ce("span", { style: S.label }, "Bevel size (%)"),
+              ce("input", { style: S.input, type: "number", min: 0.1, max: 3, step: 0.1,
+                            value: t.matteBevelSize, onChange: e => update("matteBevelSize", Number(e.target.value)) })
+            ),
+            ce("div", { style: S.row },
+              ce("span", { style: S.label }, "Strength (%)"),
+              ce("input", { style: S.input, type: "number", min: 0, max: 100,
+                            value: t.matteBevelStrength, onChange: e => update("matteBevelStrength", Number(e.target.value)) })
+            ),
           ),
         ),
+        t.matEnabled === false && t.frameStyle === "none" && ce("div", { style: { ...S.label, fontSize: 10, color: "var(--color-accent)", marginTop: 6 } },
+          "Tip: pick a Frame style (Frame tab) — otherwise there is neither mat nor frame."),
       ),
 
       // ── FRAME ──
@@ -1607,12 +1647,18 @@ export function activate(api) {
         )),
         ce("button", { style: { ...S.btn, width: "100%", marginBottom: 10 }, onClick: addField }, "+ Add text field"),
         (() => {
+          const enabledFields = t.textFields.filter(f => f.enabled);
+          if (t.matEnabled === false && enabledFields.length) {
+            return ce("div", { style: { ...S.label, color: "var(--color-accent)", marginBottom: 10, lineHeight: 1.4 } },
+              "⚠ Caption text needs a mat band. With \"No mat (frame only)\" enabled, captions won't have room — disable them or turn the mat back on."
+            );
+          }
           // Heuristic, panel-side check (mirrors the render-time math in % terms,
           // since both font size and mat width are percentages of the photo's
           // long edge — the actual pixel size cancels out). Warns *before*
           // export/preview instead of only fixing it silently afterwards.
           const groups = {};
-          t.textFields.filter(f => f.enabled).forEach(f => {
+          enabledFields.forEach(f => {
             (groups[f.anchor] = groups[f.anchor] || []).push(f);
           });
           const overflowing = Object.entries(groups).filter(([anchor, fields]) => {
@@ -1723,10 +1769,12 @@ export function activate(api) {
     const long  = Math.max(rect.w, rect.h);
     const short = Math.min(rect.w, rect.h);
     const frameW    = tpl.frameStyle !== "none" ? long * (tpl.frameWidth / 100) : 0;
-    const matTop    = long * (tpl.matWidthTop    / 100);
-    const matRight  = long * (tpl.matWidthRight  / 100);
-    const matBottom = long * (tpl.matWidthBottom / 100);
-    const matLeft   = long * (tpl.matWidthLeft   / 100);
+    // Overlay placeholder uses the same mat-off → zero insets rule as export.
+    const matScale = tpl.matEnabled === false ? 0 : 1;
+    const matTop    = long * (tpl.matWidthTop    / 100) * matScale;
+    const matRight  = long * (tpl.matWidthRight  / 100) * matScale;
+    const matBottom = long * (tpl.matWidthBottom / 100) * matScale;
+    const matLeft   = long * (tpl.matWidthLeft   / 100) * matScale;
     const cornerR   = tpl.cornerStyle === "rounded" ? short * (tpl.cornerRadius / 100) : 0;
     const outerW = rect.w + matLeft + matRight + frameW * 2;
     const outerH = rect.h + matTop + matBottom + frameW * 2;
@@ -1748,14 +1796,15 @@ export function activate(api) {
 
     // Before the first render completes: a lightweight solid-color placeholder
     // outline, so there's still some immediate visual feedback.
-    const matBoxStyle = {
+    const matOn = tpl.matEnabled !== false && (matTop + matRight + matBottom + matLeft) > 0;
+    const matBoxStyle = matOn ? {
       position: "absolute", pointerEvents: "none", boxSizing: "border-box",
       left: rect.x - matLeft, top: rect.y - matTop,
       width: rect.w + matLeft + matRight, height: rect.h + matTop + matBottom,
       borderStyle: "solid", borderColor: tpl.matColor || "#ffffff",
       borderWidth: `${matTop}px ${matRight}px ${matBottom}px ${matLeft}px`,
       borderRadius: cornerR ? cornerR + Math.max(matTop, matRight, matBottom, matLeft) : 0,
-    };
+    } : null;
     const frameBoxStyle = frameW > 0 ? {
       position: "absolute", pointerEvents: "none", boxSizing: "border-box",
       left: outerLeft, top: outerTop, width: outerW, height: outerH,
@@ -1765,7 +1814,7 @@ export function activate(api) {
 
     return ce("div", { style: { position: "absolute", inset: 0, pointerEvents: "none" } },
       frameBoxStyle && ce("div", { style: frameBoxStyle }),
-      ce("div", { style: matBoxStyle }),
+      matBoxStyle && ce("div", { style: matBoxStyle }),
     );
   }
 
