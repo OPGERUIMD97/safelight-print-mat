@@ -1,10 +1,11 @@
-// Safelight Print Mat Extension v1.2.0
+// Safelight Print Mat Extension v1.2.1
 // Complete photo framing toolkit:
 // Canvas system, photo scale, mat + bevel, frame + ratio, rounded/circle corners,
 // directional shadows (frame + internal), textures, EXIF captions, defaults.
 // Mat/frame can each be disabled independently ("No mat" / "No frame").
-// Panel preview always reflects current settings; template "enabled" = Develop overlay.
-// Export panel has its own Apply + Template settings (not "No settings.").
+// Panel preview always reflects current settings; template "enabled" = Develop overlay
+// (off by default). Export panel has Apply + Template settings.
+// Develop overlay fits the full framed unit into the viewport (Fit includes mat/frame).
 
 const STORAGE_KEY  = "safelight-print-mat-templates";
 const DEFAULTS_KEY = "safelight-print-mat-user-defaults";
@@ -130,7 +131,8 @@ function freshTemplate() {
   return {
     id: "default",
     name: "Classic Mat",
-    enabled: true,
+    // Off by default: live overlay is heavy (zoom/pan). Export uses Export-panel Apply.
+    enabled: false,
 
     // Canvas (the "stage" the framed photo sits on — independent of photo size)
     canvasRatio: "auto",
@@ -966,9 +968,9 @@ function getProcessorFields(tpls) {
 
 // ── Activation ─────────────────────────────────────────────────────────────────
 export function activate(api) {
-  console.log("%c[safelight-print-mat] extension loaded — v1.2.0", "color:#C15F3C;font-weight:bold");
+  console.log("%c[safelight-print-mat] extension loaded — v1.2.1", "color:#C15F3C;font-weight:bold");
   const { react: React, stores } = api;
-  const { useState, useEffect, useCallback, useRef } = React;
+  const { useState, useEffect, useCallback, useRef, useLayoutEffect } = React;
   const ce = (type, props, ...ch) => React.createElement(type, props, ...ch);
 
   // Inline SVG icons (instead of emoji) so they render consistently across
@@ -1362,7 +1364,7 @@ export function activate(api) {
         )
       ),
       ce("div", { style: { ...S.label, fontSize: 10, marginBottom: 4, lineHeight: 1.4 } },
-        "Live overlay on the Develop canvas. Export has its own Apply + Template controls under Print Mat — panel preview always shows current settings."),
+        "Off by default (can slow zoom/pan). When on, the full mat+frame is fitted into the Develop view. Export uses Apply print mat in the Export panel — panel preview always shows current settings."),
 
       ce("hr", { style: S.divider }),
 
@@ -1829,25 +1831,22 @@ export function activate(api) {
   }
 
   // ── Develop-canvas overlay ───────────────────────────────────────────────────
-  // Shows the *complete* framed result (texture, bevel, shadow, captions —
-  // everything, identical to Generate Preview/export) directly over the live
-  // Develop canvas as you edit. Re-rendering the full mat is too expensive to
-  // do on every slider tick, so it's debounced; while a new render is being
-  // computed, the previous rendered frame stays visible (no flicker back to
-  // a placeholder) and only a lightweight outline is shown before the very
-  // first render completes.
+  // Shows the complete framed result over the live Develop canvas. Safelight Fit
+  // only sizes the photo rect; we scale the full framed unit (photo+mat+frame)
+  // into the overlay viewport so nothing is clipped ("Fit includes overlay").
+  // Full re-render is debounced and does NOT re-run on zoom/pan (rect changes
+  // only reposition/rescale CSS). Export is untouched.
   function DevelopOverlay() {
     const [tpl, setTpl] = useState(() => resolveExportTemplate(loadTemplates()));
     const [photo, setPhoto] = useState(null);
     const [developParams, setDevelopParams] = useState(null);
     const [renderedUrl, setRenderedUrl] = useState(null);
+    const [viewSize, setViewSize] = useState({ w: 0, h: 0 });
     const renderedUrlRef = useRef(null);
     const debounceRef = useRef(null);
     const overlayGenRef = useRef(0);
+    const rootRef = useRef(null);
 
-    // Template edits happen in the panel (a separate React tree/instance).
-    // Prefer the in-memory cache (updated immediately on edits); fall back to
-    // a light poll so we still pick up changes if the panel remounts.
     useEffect(() => {
       const id = setInterval(() => {
         const next = resolveExportTemplate(loadTemplates());
@@ -1871,11 +1870,21 @@ export function activate(api) {
       return () => { unsubCat(); unsubDev(); };
     }, []);
 
+    // Measure the Develop canvas area so we can Fit the framed unit into it.
+    useLayoutEffect(() => {
+      const el = rootRef.current;
+      if (!el || typeof ResizeObserver === "undefined") return;
+      const measure = () => setViewSize({ w: el.clientWidth, h: el.clientHeight });
+      measure();
+      const ro = new ResizeObserver(measure);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }, [tpl?.enabled]);
+
     const overlay = api.develop.useDevelopOverlay();
     const rect = overlay?.rect;
 
-    // Debounced downscaled render for the Develop canvas overlay.
-    // Enable gate: when off, show nothing here (panel preview still works).
+    // Full bitmap render only when edits/template/photo change — not on zoom/pan.
     useEffect(() => {
       if (!developParams || !tpl || tpl.enabled === false || !api.develop?.captureFrame) {
         if (tpl?.enabled === false && renderedUrlRef.current) {
@@ -1891,7 +1900,6 @@ export function activate(api) {
         try {
           const bitmap = await api.develop.captureFrame(developParams);
           if (gen !== overlayGenRef.current) { bitmap.close?.(); return; }
-          // Render near display resolution — overlay is scaled to rect anyway.
           const dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
           const displayLong = Math.max(rect?.w || 900, rect?.h || 900) * dpr;
           const maxLongEdge = Math.min(1600, Math.max(720, Math.round(displayLong * 1.15)));
@@ -1921,60 +1929,99 @@ export function activate(api) {
         }
       }, 550);
       return () => clearTimeout(debounceRef.current);
-    }, [developParams, tpl, photo, rect?.w, rect?.h]);
+      // intentionally omit rect — zoom/pan only updates CSS geometry below
+      // eslint-disable-next-line
+    }, [developParams, tpl, photo]);
 
     useEffect(() => () => { if (renderedUrlRef.current) URL.revokeObjectURL(renderedUrlRef.current); }, []);
 
-    if (!rect || !tpl || tpl.enabled === false) return null;
-
-    const long  = Math.max(rect.w, rect.h);
-    const short = Math.min(rect.w, rect.h);
-    const frameW    = isFrameOn(tpl) ? long * (tpl.frameWidth / 100) : 0;
-    // Overlay placeholder uses the same mat-off → zero insets rule as export.
-    const matScale = tpl.matEnabled === false ? 0 : 1;
-    const matTop    = long * (tpl.matWidthTop    / 100) * matScale;
-    const matRight  = long * (tpl.matWidthRight  / 100) * matScale;
-    const matBottom = long * (tpl.matWidthBottom / 100) * matScale;
-    const matLeft   = long * (tpl.matWidthLeft   / 100) * matScale;
-    const cornerR   = tpl.cornerStyle === "rounded" ? short * (tpl.cornerRadius / 100) : 0;
-    const outerW = rect.w + matLeft + matRight + frameW * 2;
-    const outerH = rect.h + matTop + matBottom + frameW * 2;
-    const outerRadius = cornerR ? cornerR + Math.max(matTop, matRight, matBottom, matLeft) + frameW : 0;
-    const outerLeft = rect.x - matLeft - frameW;
-    const outerTop  = rect.y - matTop - frameW;
-
-    if (renderedUrl) {
-      // Framed result scaled to the Develop rect (rendered at display-ish res).
-      return ce("img", {
-        src: renderedUrl,
-        style: {
-          position: "absolute", pointerEvents: "none",
-          left: outerLeft, top: outerTop, width: outerW, height: outerH,
-          borderRadius: outerRadius, objectFit: "fill",
-        },
-      });
+    // Always mount a root so ResizeObserver can measure, even before rect exists.
+    if (!tpl || tpl.enabled === false) {
+      return ce("div", { ref: rootRef, style: { position: "absolute", inset: 0, pointerEvents: "none" } });
+    }
+    if (!rect) {
+      return ce("div", { ref: rootRef, style: { position: "absolute", inset: 0, pointerEvents: "none" } });
     }
 
-    // Before the first render completes: a lightweight solid-color placeholder
-    // outline, so there's still some immediate visual feedback.
+    const dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
+    const snap = (v) => Math.round(v * dpr) / dpr;
+    const photoLeft = snap(rect.x);
+    const photoTop = snap(rect.y);
+    const photoRight = snap(rect.x + rect.w);
+    const photoBottom = snap(rect.y + rect.h);
+    const photoW = photoRight - photoLeft;
+    const photoH = photoBottom - photoTop;
+
+    const long = Math.max(photoW, photoH);
+    const short = Math.min(photoW, photoH);
+    const matScale = tpl.matEnabled === false ? 0 : 1;
+    let frameW = isFrameOn(tpl) ? long * (tpl.frameWidth / 100) : 0;
+    let matTop = long * (tpl.matWidthTop / 100) * matScale;
+    let matRight = long * (tpl.matWidthRight / 100) * matScale;
+    let matBottom = long * (tpl.matWidthBottom / 100) * matScale;
+    let matLeft = long * (tpl.matWidthLeft / 100) * matScale;
+    frameW = snap(frameW);
+    matTop = snap(matTop);
+    matRight = snap(matRight);
+    matBottom = snap(matBottom);
+    matLeft = snap(matLeft);
+
+    const cornerR = tpl.cornerStyle === "rounded" ? short * (tpl.cornerRadius / 100) : 0;
+    const naturalW = photoW + matLeft + matRight + frameW * 2;
+    const naturalH = photoH + matTop + matBottom + frameW * 2;
+
+    // Fit the full framed unit into the Develop viewport (not just the photo rect).
+    const vw = viewSize.w || naturalW;
+    const vh = viewSize.h || naturalH;
+    const fitScale = Math.min(vw / Math.max(naturalW, 1), vh / Math.max(naturalH, 1));
+    const dispW = naturalW * fitScale;
+    const dispH = naturalH * fitScale;
+    const dispLeft = (vw - dispW) / 2;
+    const dispTop = (vh - dispH) / 2;
+    const s = fitScale;
+    const outerRadius = (cornerR ? cornerR + Math.max(matTop, matRight, matBottom, matLeft) + frameW : 0) * s;
+
+    const backdrop = {
+      position: "absolute", inset: 0, pointerEvents: "none",
+      background: tpl.canvasRatio && tpl.canvasRatio !== "auto"
+        ? (tpl.canvasColor || "#e8e4dc")
+        : "var(--color-surface-0, #1a1a1a)",
+    };
+
+    if (renderedUrl) {
+      return ce("div", { ref: rootRef, style: { position: "absolute", inset: 0, pointerEvents: "none" } },
+        ce("div", { style: backdrop }),
+        ce("img", {
+          src: renderedUrl,
+          style: {
+            position: "absolute", pointerEvents: "none",
+            left: dispLeft, top: dispTop, width: dispW, height: dispH,
+            borderRadius: outerRadius, objectFit: "fill",
+          },
+        }),
+      );
+    }
+
     const matOn = tpl.matEnabled !== false && (matTop + matRight + matBottom + matLeft) > 0;
     const matBoxStyle = matOn ? {
       position: "absolute", pointerEvents: "none", boxSizing: "border-box",
-      left: rect.x - matLeft, top: rect.y - matTop,
-      width: rect.w + matLeft + matRight, height: rect.h + matTop + matBottom,
+      left: dispLeft + frameW * s, top: dispTop + frameW * s,
+      width: dispW - frameW * 2 * s, height: dispH - frameW * 2 * s,
       borderStyle: "solid", borderColor: tpl.matColor || "#ffffff",
-      borderWidth: `${matTop}px ${matRight}px ${matBottom}px ${matLeft}px`,
-      borderRadius: cornerR ? cornerR + Math.max(matTop, matRight, matBottom, matLeft) : 0,
+      borderWidth: `${matTop * s}px ${matRight * s}px ${matBottom * s}px ${matLeft * s}px`,
+      borderRadius: (cornerR ? cornerR + Math.max(matTop, matRight, matBottom, matLeft) : 0) * s,
     } : null;
     const frameStyleKey = effectiveFrameStyle(tpl);
     const frameBoxStyle = frameW > 0 ? {
       position: "absolute", pointerEvents: "none", boxSizing: "border-box",
-      left: outerLeft, top: outerTop, width: outerW, height: outerH,
-      borderStyle: "solid", borderColor: FRAME_COLORS[frameStyleKey] || "#1a1a1a", borderWidth: frameW,
+      left: dispLeft, top: dispTop, width: dispW, height: dispH,
+      borderStyle: "solid", borderColor: FRAME_COLORS[frameStyleKey] || "#1a1a1a",
+      borderWidth: frameW * s,
       borderRadius: outerRadius,
     } : null;
 
-    return ce("div", { style: { position: "absolute", inset: 0, pointerEvents: "none" } },
+    return ce("div", { ref: rootRef, style: { position: "absolute", inset: 0, pointerEvents: "none" } },
+      ce("div", { style: backdrop }),
       frameBoxStyle && ce("div", { style: frameBoxStyle }),
       matBoxStyle && ce("div", { style: matBoxStyle }),
     );

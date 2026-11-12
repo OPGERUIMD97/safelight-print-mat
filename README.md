@@ -49,6 +49,13 @@ Unlimited fields: Custom text, Camera (EXIF), Date & time (EXIF), Lens (EXIF), E
 
 ## Changelog
 
+### 1.2.1 — Fit includes overlay, Export Apply, Develop off by default
+- **Show in Develop** is **off by default** (live overlay is heavy during zoom/pan)
+- Develop overlay **fits the full framed unit** (photo + mat + frame) into the viewport — no more clipped top/bottom in Fit
+- Zoom/pan only repositions the overlay (no full re-render on every rect change)
+- Export panel **Apply print mat** + **Template** (no more "No settings.")
+- Panel preview always shows current settings; Export Apply is independent of Show in Develop
+
 ### 1.2.0 — Frame toggle, Export settings, faster live path
 - **No frame (mat only)** toggle on the Frame tab — same pattern as No mat
 - **Show in Develop** controls the Develop overlay only; panel preview always shows current settings
