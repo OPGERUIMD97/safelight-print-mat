@@ -970,7 +970,8 @@ function getProcessorFields(tpls) {
 export function activate(api) {
   console.log("%c[safelight-print-mat] extension loaded — v1.2.1", "color:#C15F3C;font-weight:bold");
   const { react: React, stores } = api;
-  const { useState, useEffect, useCallback, useRef, useLayoutEffect } = React;
+  const { useState, useEffect, useCallback, useRef } = React;
+  const useLayoutEffect = React.useLayoutEffect || useEffect;
   const ce = (type, props, ...ch) => React.createElement(type, props, ...ch);
 
   // Inline SVG icons (instead of emoji) so they render consistently across
