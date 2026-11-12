@@ -49,6 +49,11 @@ Unlimited fields: Custom text, Camera (EXIF), Date & time (EXIF), Lens (EXIF), E
 
 ## Changelog
 
+### 1.2.2 — zoom follows rect; Fit still fits full mat+frame
+- **Zoom in**: Develop overlay sticks 1:1 to the photo rect (no force-fit, no full-viewport backdrop)
+- **Fit / zoomed out**: still fits the full framed unit into the Develop viewport
+- Export / Apply / Show in Develop unchanged
+
 ### 1.2.1 — Fit includes overlay, Export Apply, Develop off by default
 - **Show in Develop** is **off by default** (live overlay is heavy during zoom/pan)
 - Develop overlay **fits the full framed unit** (photo + mat + frame) into the viewport — no more clipped top/bottom in Fit

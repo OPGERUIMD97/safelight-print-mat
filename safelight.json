@@ -1,8 +1,8 @@
 {
   "id": "safelight-print-mat",
   "name": "Print Mat",
-  "version": "1.2.1",
-  "description": "Complete photo framing toolkit: canvas, crop, No mat / No frame, matte bevel, frame colors, shadows, textures, EXIF captions. Show in Develop off by default; overlay fits full mat+frame into the Develop view. Export panel Apply print mat + Template. Panel preview always on.",
+  "version": "1.2.2",
+  "description": "Complete photo framing toolkit: canvas, crop, No mat / No frame, matte bevel, frame colors, shadows, textures, EXIF captions. Show in Develop off by default; Fit fits full mat+frame, zoom follows rect 1:1. Export panel Apply print mat + Template. Panel preview always on.",
   "author": "OPGERUIMD97",
   "main": "dist/index.js",
   "categories": "Export"
