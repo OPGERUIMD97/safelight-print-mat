@@ -1,4 +1,4 @@
-// Safelight Print Mat Extension v1.2.1
+// Safelight Print Mat Extension v1.2.2
 // Complete photo framing toolkit:
 // Canvas system, photo scale, mat + bevel, frame + ratio, rounded/circle corners,
 // directional shadows (frame + internal), textures, EXIF captions, defaults.
@@ -968,7 +968,7 @@ function getProcessorFields(tpls) {
 
 // ── Activation ─────────────────────────────────────────────────────────────────
 export function activate(api) {
-  console.log("%c[safelight-print-mat] extension loaded — v1.2.1", "color:#C15F3C;font-weight:bold");
+  console.log("%c[safelight-print-mat] extension loaded — v1.2.2", "color:#C15F3C;font-weight:bold");
   const { react: React, stores } = api;
   const { useState, useEffect, useCallback, useRef } = React;
   const useLayoutEffect = React.useLayoutEffect || useEffect;
@@ -1832,9 +1832,8 @@ export function activate(api) {
   }
 
   // ── Develop-canvas overlay ───────────────────────────────────────────────────
-  // Shows the complete framed result over the live Develop canvas. Safelight Fit
-  // only sizes the photo rect; we scale the full framed unit (photo+mat+frame)
-  // into the overlay viewport so nothing is clipped ("Fit includes overlay").
+  // Fit-mode: schaal heel kader in de viewport. Zoom-in: plak overlay 1:1 op rect
+  // (mat mag clippen). Geen force-fit tijdens zoom.
   // Full re-render is debounced and does NOT re-run on zoom/pan (rect changes
   // only reposition/rescale CSS). Export is untouched.
   function DevelopOverlay() {
@@ -1970,17 +1969,27 @@ export function activate(api) {
     const cornerR = tpl.cornerStyle === "rounded" ? short * (tpl.cornerRadius / 100) : 0;
     const naturalW = photoW + matLeft + matRight + frameW * 2;
     const naturalH = photoH + matTop + matBottom + frameW * 2;
-
-    // Fit the full framed unit into the Develop viewport (not just the photo rect).
     const vw = viewSize.w || naturalW;
     const vh = viewSize.h || naturalH;
-    const fitScale = Math.min(vw / Math.max(naturalW, 1), vh / Math.max(naturalH, 1));
-    const dispW = naturalW * fitScale;
-    const dispH = naturalH * fitScale;
-    const dispLeft = (vw - dispW) / 2;
-    const dispTop = (vh - dispH) / 2;
-    const s = fitScale;
+    // Zoomed in = photo larger than the Develop view → follow rect 1:1.
+    // Otherwise (Fit / zoomed out) → fit the full framed unit into the viewport.
+    const zoomedIn = photoW > vw + 1 || photoH > vh + 1;
+    let dispLeft, dispTop, dispW, dispH, s;
+    if (zoomedIn) {
+      s = 1;
+      dispW = naturalW;
+      dispH = naturalH;
+      dispLeft = photoLeft - matLeft - frameW;
+      dispTop  = photoTop  - matTop  - frameW;
+    } else {
+      s = Math.min(vw / Math.max(naturalW, 1), vh / Math.max(naturalH, 1));
+      dispW = naturalW * s;
+      dispH = naturalH * s;
+      dispLeft = (vw - dispW) / 2;
+      dispTop  = (vh - dispH) / 2;
+    }
     const outerRadius = (cornerR ? cornerR + Math.max(matTop, matRight, matBottom, matLeft) + frameW : 0) * s;
+    const showBackdrop = !zoomedIn;
 
     const backdrop = {
       position: "absolute", inset: 0, pointerEvents: "none",
@@ -1990,8 +1999,8 @@ export function activate(api) {
     };
 
     if (renderedUrl) {
-      return ce("div", { ref: rootRef, style: { position: "absolute", inset: 0, pointerEvents: "none" } },
-        ce("div", { style: backdrop }),
+      return ce("div", { ref: rootRef, style: { position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden" } },
+        showBackdrop && ce("div", { style: backdrop }),
         ce("img", {
           src: renderedUrl,
           style: {
@@ -2021,8 +2030,8 @@ export function activate(api) {
       borderRadius: outerRadius,
     } : null;
 
-    return ce("div", { ref: rootRef, style: { position: "absolute", inset: 0, pointerEvents: "none" } },
-      ce("div", { style: backdrop }),
+    return ce("div", { ref: rootRef, style: { position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden" } },
+      showBackdrop && ce("div", { style: backdrop }),
       frameBoxStyle && ce("div", { style: frameBoxStyle }),
       matBoxStyle && ce("div", { style: matBoxStyle }),
     );
