@@ -12,6 +12,8 @@ OPGERUIMD97/safelight-mat-frame
 
 Your saved Print Mat templates stay in browser storage under `safelight-print-mat-*` so Mat/Frame can import them.
 
+From Safelight 3.2.6, installing Framing / Border turns this extension off automatically, and the Extensions window marks it **Discontinued** with an **Install replacement** button.
+
 ## Changelog
 
 ### 1.3.0 — discontinued
